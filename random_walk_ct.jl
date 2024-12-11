@@ -1,8 +1,9 @@
 using LinearAlgebra
 using NMRInversions
 using GLMakie
-using Optimization, OptimizationOptimJL
 using Serialization
+using Optim
+using UnicodePlots
 
 function read_raw_data(filename = "Berea_2d25um_binary.raw")
 
@@ -48,8 +49,8 @@ function run_random_walk(
     # Convert to xyz coordinates 
     xyz = [collect(Tuple.(starting_point_indx[i])) for i in 1:n_walkers] .* voxel_length
 
-    # select random position within voxel
-    xyz = xyz  .- [rand(3) for _ in 1:n_walkers] .* voxel_length;
+    # select random initial position within voxel
+    xyz = xyz  .- [rand(3) for _ in 1:n_walkers] .* voxel_length
 
     ## Loop
     kill_probability = (2*relaxivity*step_length) / (3*D)
@@ -57,24 +58,20 @@ function run_random_walk(
 
     for i = 1:n_steps
 
-        #=if i % 1000 == 0=#
-        #=    @show i=#
-        #=end=#
-
-        xyz_step = [LinearAlgebra.normalize(randn(3)) * step_length for _ in 1:length(xyz)]
+        xyz_step = [LinearAlgebra.normalize(randn(3)) * step_length for _ in eachindex(xyz)]
 
         # Find which walkers hit a wall
-        hitwall = [data[ ceil.(Int, i./voxel_length)...] for i in (xyz .+ xyz_step)]
+        hitwall = [data[ ceil.(Int, position./voxel_length)...] for position in (xyz .+ xyz_step)]
 
-        # Step, only for those who are not about to hit a wall and are alive 
+        # Step, only for those who are not about to hit a wall 
         # (others are just left where they are)
-        xyz[.~hitwall] .= xyz[.~hitwall] .+ xyz_step[.~hitwall];
+        xyz[.~hitwall] .= xyz[.~hitwall] .+ xyz_step[.~hitwall]
 
-        # Decide which walkers will die
-        for (i,x) in enumerate(hitwall)
-            if x && rand() < kill_probability
-                popat!(xyz,i)
-            end
+        # Kill those who hit a wall and don't pass the probability test
+        # reverse so that it pops bottom to top and then we don't have to worry
+        # about indexing out of bounds, since the array can shrink
+        for i in reverse(findall(hitwall))[rand(count(hitwall)) .< kill_probability]
+            popat!(xyz, i)
         end
 
         M[i] = length(xyz)
@@ -94,7 +91,6 @@ function cost(u,p)
     M_compressed = p[3];
     exp_data = p[4];
 
-    println("testing for relaxivity $(u[1])")
     t, M = run_random_walk(data, n_steps = Int(6e5), relaxivity = u[1])
 
     if exp_data.seq in [NMRInversions.IR]
@@ -109,7 +105,16 @@ function cost(u,p)
         M_compressed[i] = M[ind]
     end
 
-    return sum((M_compressed .- real(exp_data.y)).^2)
+    data_y = real.(exp_data.y) ./ maximum(real(exp_data.y))
+
+    residuals = M_compressed .- data_y
+    cost = norm(residuals, 1)
+
+    p = lineplot(t_compressed, M_compressed, name = "Simulation", title = "Rho: $(u[1]), Cost: $(cost)");
+    lineplot!(p, exp_data.x, data_y , name = "Experiment")
+    println(p)
+
+    return cost
 
 end
 
@@ -118,13 +123,11 @@ function find_relaxivity(ct_data, exp_data)
     t_compressed = zeros(length(exp_data.x));
     M_compressed = zeros(length(exp_data.x));
 
-    p = Optimization.OptimizationProblem(
-        Optimization.OptimizationFunction(cost), 
-        [20e-6],
-        (ct_data, t_compressed, M_compressed, exp_data),
-        lb=[1e-8], ub=[1e-5]
+    ρ = optimize(
+        x -> cost(x, (ct_data, t_compressed, M_compressed, exp_data)),
+        1e-5, 1e-3,
+        GoldenSection()
     )
-    ρ = OptimizationOptimJL.solve(p, Optim.ParticleSwarm(), maxiters=50, maxtime=1e5)
 
     return ρ
 end
@@ -132,3 +135,4 @@ end
 data = read_raw_data();
 exp_data = deserialize("./exp_data.bin");
 find_relaxivity(data, exp_data)
+
