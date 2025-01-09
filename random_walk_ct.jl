@@ -1,13 +1,13 @@
 using LinearAlgebra
 using NMRInversions
-using GLMakie
-using Serialization
 using Optim
 using UnicodePlots
+using Random
 
-function read_raw_data(filename = "Berea_2d25um_binary.raw")
+function read_raw_data(filename::String)
 
-    data = zeros(Bool,1000,1000,1000)
+    println("reading data from " * filename)
+    data = zeros(UInt8,1600,1600,1100)
 
     open(filename, "r") do io
         i = 1
@@ -24,6 +24,8 @@ function read_raw_data(filename = "Berea_2d25um_binary.raw")
     data[end,:,:].=true;
     data[:,end,:].=true;
     data[:,:,end].=true;
+
+    println("data reading success")
     
     return data 
 end
@@ -34,20 +36,32 @@ end
 
 function run_random_walk(
     data;
-    n_walkers = 1000,
-    n_steps = 10000,
+    n_walkers = 10^4,
+    n_steps = 10^4,
     relaxivity = 20e-6, #m/s
     D = 2.96e-9, #(water, m^2 s^-1)
     voxel_length = 2.25e-6 , # μm e-6 (m)
-    step_length = voxel_length/8,
+    step_length = voxel_length/10,
 )
+
+    grain = 1
+    brine = 0
+    three_phases = maximum(data) == 2
+
+    if three_phases 
+        grain = 2
+        brine = 1
+    end
+    CO2 = 0
+
+    Random.seed!(1)
 
     # Find all indices of pore spaces, and select some of them to 
     # use as starting points, one for each walker
-    starting_point_indx = rand(findall(iszero, data), n_walkers);
+    starting_point_indx = rand(findall(x -> x == brine, data), n_walkers);
 
     # Convert to xyz coordinates 
-    xyz = [collect(Tuple.(starting_point_indx[i])) for i in 1:n_walkers] .* voxel_length
+    xyz = [collect(Tuple(starting_point_indx[i])) for i in 1:n_walkers] .* voxel_length
 
     # select random initial position within voxel
     xyz = xyz  .- [rand(3) for _ in 1:n_walkers] .* voxel_length
@@ -61,11 +75,18 @@ function run_random_walk(
         xyz_step = [LinearAlgebra.normalize(randn(3)) * step_length for _ in eachindex(xyz)]
 
         # Find which walkers hit a wall
-        hitwall = [data[ ceil.(Int, position./voxel_length)...] for position in (xyz .+ xyz_step)]
+        hitwall = [data[ ceil.(Int, position./voxel_length)...] == grain for position in (xyz .+ xyz_step)]
 
-        # Step, only for those who are not about to hit a wall 
+        hitCO2 = zeros(Bool, length(xyz))
+        if three_phases
+            hitCO2 = [data[ ceil.(Int, position./voxel_length)...] == CO2 for position in (xyz .+ xyz_step)]
+        end
+
+        hitsomething = hitwall .|| hitCO2
+
+        # Step, only for those who are not about to hit a wall or CO2
         # (others are just left where they are)
-        xyz[.~hitwall] .= xyz[.~hitwall] .+ xyz_step[.~hitwall]
+        xyz[.~hitsomething] .= xyz[.~hitsomething] .+ xyz_step[.~hitsomething]
 
         # Kill those who hit a wall and don't pass the probability test
         # reverse so that it pops bottom to top and then we don't have to worry
@@ -90,8 +111,9 @@ function cost(u,p)
     t_compressed = p[2];
     M_compressed = p[3];
     exp_data = p[4];
+    vox_l = p[5]
 
-    t, M = run_random_walk(data, n_steps = Int(6e5), relaxivity = u[1])
+    t, M = run_random_walk(data, n_steps = Int(6e5), relaxivity = u[1], voxel_length = vox_l)
 
     if exp_data.seq in [NMRInversions.IR]
         M = 1 .- 2 .* M ./ maximum(M)
@@ -110,29 +132,34 @@ function cost(u,p)
     residuals = M_compressed .- data_y
     cost = norm(residuals, 1)
 
-    p = lineplot(t_compressed, M_compressed, name = "Simulation", title = "Rho: $(u[1]), Cost: $(cost)");
+    p = lineplot(t_compressed, M_compressed, name = "Simulation",
+                 title = "Rho: $(u[1]), Cost: $(cost)",xscale=:log10);
     lineplot!(p, exp_data.x, data_y , name = "Experiment")
+
     println(p)
 
     return cost
 
 end
 
-function find_relaxivity(ct_data, exp_data)
+function find_relaxivity(ct_data, exp_data, vox_l)
 
     t_compressed = zeros(length(exp_data.x));
     M_compressed = zeros(length(exp_data.x));
 
     ρ = optimize(
-        x -> cost(x, (ct_data, t_compressed, M_compressed, exp_data)),
-        1e-5, 1e-3,
-        GoldenSection()
+        x -> cost(x, (ct_data, t_compressed, M_compressed, exp_data, vox_l)),
+        1e-5, 1e-3
     )
 
     return ρ
 end
 
-data = read_raw_data();
-exp_data = deserialize("./exp_data.bin");
-find_relaxivity(data, exp_data)
+function read_vox_size(file)
+    x = open(file*".dict") do io
+        readuntil(io,"delta.x=")
+        x = parse(Float64, readline(io))
+        return x
+    end
+end
 
