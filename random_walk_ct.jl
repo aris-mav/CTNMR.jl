@@ -32,7 +32,6 @@ end
 
 # Pores are 0, matrix is 1
 # CT_data is true for solid space and ~CT_data is true for porespace
-#=porosity =  count(.!data) / length(data)=#
 
 function run_random_walk(
     data;
@@ -46,13 +45,18 @@ function run_random_walk(
 
     grain = 1
     brine = 0
+    CO2 = -1
     three_phases = maximum(data) == 2
 
     if three_phases 
+        println("There's CO2 in here")
         grain = 2
         brine = 1
+        CO2 = 0
     end
-    CO2 = 0
+
+    porosity = count(data .!= grain) / length(data)
+    @show porosity
 
     Random.seed!(1)
 
@@ -64,38 +68,41 @@ function run_random_walk(
     xyz = [collect(Tuple(starting_point_indx[i])) for i in 1:n_walkers] .* voxel_length
 
     # select random initial position within voxel
-    xyz = xyz  .- [rand(3) for _ in 1:n_walkers] .* voxel_length
+    xyz = xyz .- ([rand(3) for _ in 1:n_walkers] .* voxel_length)
 
-    ## Loop
     kill_probability = (2*relaxivity*step_length) / (3*D)
     M = zeros(Int, n_steps)
+    steps = [zeros(3) for _ in eachindex(xyz)]
+    alive_walkers = trues(length(xyz))
 
     for i = 1:n_steps
 
-        xyz_step = [LinearAlgebra.normalize(randn(3)) * step_length for _ in eachindex(xyz)]
+        @show i
 
-        # Find which walkers hit a wall
-        hitwall = [data[ ceil.(Int, position./voxel_length)...] == grain for position in (xyz .+ xyz_step)]
+        Threads.@threads for i in findall(alive_walkers)
 
-        hitCO2 = zeros(Bool, length(xyz))
-        if three_phases
-            hitCO2 = [data[ ceil.(Int, position./voxel_length)...] == CO2 for position in (xyz .+ xyz_step)]
+            @views begin
+                normalize!(randn!(steps[i]))
+                @. steps[i] = steps[i] * step_length
+                @. xyz[i] = xyz[i] + steps[i]
+
+                voxel = data[ceil.(Int, xyz[i] ./ voxel_length)...]
+
+                if voxel == grain
+
+                    if rand() < kill_probability
+                        alive_walkers[i] = false
+                    else # Step back
+                        @. xyz[i] = xyz[i] - steps[i] 
+                    end
+
+                elseif voxel == CO2 # Step back
+                    @. xyz[i] = xyz[i] - steps[i]
+                end
+            end
         end
 
-        hitsomething = hitwall .|| hitCO2
-
-        # Step, only for those who are not about to hit a wall or CO2
-        # (others are just left where they are)
-        xyz[.~hitsomething] .= xyz[.~hitsomething] .+ xyz_step[.~hitsomething]
-
-        # Kill those who hit a wall and don't pass the probability test
-        # reverse so that it pops bottom to top and then we don't have to worry
-        # about indexing out of bounds, since the array can shrink
-        for i in reverse(findall(hitwall))[rand(count(hitwall)) .< kill_probability]
-            popat!(xyz, i)
-        end
-
-        M[i] = length(xyz)
+        M[i] = count(alive_walkers)
     end
 
     time_step = step_length^2 / 6D
@@ -103,7 +110,6 @@ function run_random_walk(
 
     return t, M
 end
-
 
 function cost(u,p)
 
@@ -163,3 +169,28 @@ function read_vox_size(file)
     end
 end
 
+
+#=function foo()=#
+#==#
+#=    xyz = [zeros(3) for _ in 1:10]; # Coordinates of each walker=#
+#=    steps = [zeros(3) for _ in 1:10]; =#
+#=    step_size = 4=#
+#=    time_steps = 100=#
+#=    alive_walkers = trues(length(xyz))=#
+#==#
+#=    @time for i in 1:time_steps=#
+#==#
+#=        Threads.@threads for i in findall(alive_walkers)=#
+#==#
+#=            normalize!(randn!(steps[i]))=#
+#=            @. steps[i] = steps[i] * step_size=#
+#=            @. xyz[i] = xyz[i] + steps[i]=#
+#==#
+#=            if any(xyz[i] .>10)=#
+#=                alive_walkers[i] = false=#
+#=            end=#
+#=        end=#
+#=    end=#
+#=end=#
+#==#
+#=foo()=#
