@@ -2,13 +2,12 @@ using LinearAlgebra
 using NMRInversions
 using Optim
 using UnicodePlots
-using Random
 using StaticArrays
 
 function read_raw_data(filename::String)
 
     println("reading data from " * filename)
-    data = zeros(UInt8,1600,1600,1100)
+    data = zeros(UInt8, 1600,1600,1100)
 
     open(filename, "r") do io
         i = 1
@@ -18,18 +17,25 @@ function read_raw_data(filename::String)
         end
     end
     
+    grain::UInt8 = 1
+    brine::UInt8 = 0
+    CO2::UInt8 = 9
+    if  maximum(data) == 2
+        grain = 2
+        brine = 1
+        CO2 = 0
+    end
+
     # Make edges solid, so that the walkers cannot escape
-    data[1,:,:].=true;
-    data[:,1,:].=true;
-    data[:,:,1].=true;
-    data[end,:,:].=true;
-    data[:,end,:].=true;
-    data[:,:,end].=true;
+    data[1,:,:].= grain;
+    data[:,1,:].= grain;
+    data[:,:,1].= grain;
+    data[end,:,:].= grain;
+    data[:,end,:].= grain;
+    data[:,:,end].= grain;
 
     println("data reading success")
 
-    grain = 1
-    # brine = 0
     porosity = count(data .!= grain) / length(data)
     @show porosity # sanity check
     
@@ -54,56 +60,46 @@ function threaded_walk(data; kwargs...)
 end
 
 
-function run_random_walk(data;
-                         relaxivity = 200e-6, #m/s
-                         n_walkers = 10^5,
-                         n_steps = 10^4,
-                         D = 2.96e-9, #(water, m^2 s^-1)
-                         voxel_length = 2.25e-6 , # μm e-6 (m)
-                         step_length = voxel_length/7, )
+function run_random_walk(lattice;
+                         relaxivity::Float64 = 200e-6, #m/s
+                         n_walkers::Int= 10^4,
+                         n_steps::Int = 10^4,
+                         D::Float64 = 2.96e-9, #(water, m^2 s^-1)
+                         voxel_length::Float64 = 2.25e-6 , # μm e-6 (m)
+                         step_length::Float64 = voxel_length/7, 
+                         )
 
-    grain = 1
-    brine = 0
-    CO2 = -1
-    three_phases = maximum(data) == 2
-    if three_phases 
-        println("There's CO2 in here")
+    grain::UInt8 = 1
+    brine::UInt8 = 0
+    CO2::UInt8 = 9
+    if  maximum(lattice) == 2
         grain = 2
         brine = 1
         CO2 = 0
     end
 
-    step = @SVector(randn(3))
     n_died = zeros(Int, n_steps) # number that died on step i
-    voxel = 1
-
-    # Preallocate
-    n_died = zeros(Int, n_steps) # number that died on step i
-    voxel = 0
-    step = @SVector rand(3)
-    xyz = @SVector rand(3)
-    starting_points_index = rand(findall(x -> x == false, data), n_walkers);
+    valid_starting_points = findall(x -> x != grain , lattice);
     kill_probability = (2*relaxivity*step_length) / (3*D)
 
     # Run
-    for cart_ind in starting_points_index
+    for _ in 1:n_walkers
 
-        xyz = SVector{3, Float64}(Tuple(cart_ind) .* voxel_length)
+        xyz = SVector{3, Float64}(Tuple(rand(valid_starting_points)) .* voxel_length)
         xyz -= (@SVector rand(3)) .* voxel_length
 
         for i in 1:n_steps
             xyz += (step = normalize(@SVector(randn(3))) * step_length)
+            voxel = lattice[Int.(cld.(xyz , voxel_length))...]
 
-            voxel = data[Int.(cld.(xyz , voxel_length))...]
-
-            if voxel == grain 
+            if voxel == grain
                 if rand() < kill_probability
                     n_died[i] += 1
                     break
                 else # take a step back and continue
                     xyz -= step
                 end
-            elseif three_phases && voxel == CO2 # take a step back and continue
+            elseif voxel == CO2 # take a step back and continue
                 xyz -= step
             end
         end
@@ -112,8 +108,7 @@ function run_random_walk(data;
     time_step = step_length^2 / 6D
     t = collect(1:n_steps) * time_step
     M = n_walkers .- cumsum(n_died)
-
-    return t, M
+    return t,M
 end
 
 
