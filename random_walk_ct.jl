@@ -3,6 +3,7 @@ using NMRInversions
 using Optim
 using UnicodePlots
 using Random
+using StaticArrays
 
 function read_raw_data(filename::String)
 
@@ -26,28 +27,45 @@ function read_raw_data(filename::String)
     data[:,:,end].=true;
 
     println("data reading success")
+
+    grain = 1
+    # brine = 0
+    porosity = count(data .!= grain) / length(data)
+    @show porosity # sanity check
     
     return data 
 end
 
-# Pores are 0, matrix is 1
-# CT_data is true for solid space and ~CT_data is true for porespace
+function threaded_walk(data; kwargs...)
 
-function run_random_walk(
-    data;
-    n_walkers = 10^4,
-    n_steps = 10^4,
-    relaxivity = 20e-6, #m/s
-    D = 2.96e-9, #(water, m^2 s^-1)
-    voxel_length = 2.25e-6 , # μm e-6 (m)
-    step_length = voxel_length/10,
-)
+    nthreads = 8
+    M = [zeros(Int, kwargs[:n_steps]) for _ in 1:nthreads]
+    t = zeros(Int, kwargs[:n_steps])
+
+    Threads.@threads for i in 1:nthreads
+        if i == 1
+            t, M[i] = run_random_walk(data; kwargs...)
+        else
+            _, M[i] = run_random_walk(data; kwargs...)
+        end
+    end
+
+    return t, sum(M)
+end
+
+
+function run_random_walk(data;
+                         relaxivity = 200e-6, #m/s
+                         n_walkers = 10^5,
+                         n_steps = 10^4,
+                         D = 2.96e-9, #(water, m^2 s^-1)
+                         voxel_length = 2.25e-6 , # μm e-6 (m)
+                         step_length = voxel_length/7, )
 
     grain = 1
     brine = 0
     CO2 = -1
     three_phases = maximum(data) == 2
-
     if three_phases 
         println("There's CO2 in here")
         grain = 2
@@ -55,61 +73,49 @@ function run_random_walk(
         CO2 = 0
     end
 
-    porosity = count(data .!= grain) / length(data)
-    @show porosity
+    step = @SVector(randn(3))
+    n_died = zeros(Int, n_steps) # number that died on step i
+    voxel = 1
 
-    Random.seed!(1)
-
-    # Find all indices of pore spaces, and select some of them to 
-    # use as starting points, one for each walker
-    starting_point_indx = rand(findall(x -> x == brine, data), n_walkers);
-
-    # Convert to xyz coordinates 
-    xyz = [collect(Tuple(starting_point_indx[i])) for i in 1:n_walkers] .* voxel_length
-
-    # select random initial position within voxel
-    xyz = xyz .- ([rand(3) for _ in 1:n_walkers] .* voxel_length)
-
+    # Preallocate
+    n_died = zeros(Int, n_steps) # number that died on step i
+    voxel = 0
+    step = @SVector rand(3)
+    xyz = @SVector rand(3)
+    starting_points_index = rand(findall(x -> x == false, data), n_walkers);
     kill_probability = (2*relaxivity*step_length) / (3*D)
-    M = zeros(Int, n_steps)
-    steps = [zeros(3) for _ in eachindex(xyz)]
-    alive_walkers = trues(length(xyz))
 
-    for i = 1:n_steps
+    # Run
+    for cart_ind in starting_points_index
 
-        @show i
+        xyz = SVector{3, Float64}(Tuple(cart_ind) .* voxel_length)
+        xyz -= (@SVector rand(3)) .* voxel_length
 
-        Threads.@threads for i in findall(alive_walkers)
+        for i in 1:n_steps
+            xyz += (step = normalize(@SVector(randn(3))) * step_length)
 
-            @views begin
-                normalize!(randn!(steps[i]))
-                @. steps[i] = steps[i] * step_length
-                @. xyz[i] = xyz[i] + steps[i]
+            voxel = data[Int.(cld.(xyz , voxel_length))...]
 
-                voxel = data[ceil.(Int, xyz[i] ./ voxel_length)...]
-
-                if voxel == grain
-
-                    if rand() < kill_probability
-                        alive_walkers[i] = false
-                    else # Step back
-                        @. xyz[i] = xyz[i] - steps[i] 
-                    end
-
-                elseif voxel == CO2 # Step back
-                    @. xyz[i] = xyz[i] - steps[i]
+            if voxel == grain 
+                if rand() < kill_probability
+                    n_died[i] += 1
+                    break
+                else # take a step back and continue
+                    xyz -= step
                 end
+            elseif three_phases && voxel == CO2 # take a step back and continue
+                xyz -= step
             end
         end
-
-        M[i] = count(alive_walkers)
     end
 
     time_step = step_length^2 / 6D
     t = collect(1:n_steps) * time_step
+    M = n_walkers .- cumsum(n_died)
 
     return t, M
 end
+
 
 function cost(u,p)
 
@@ -119,7 +125,11 @@ function cost(u,p)
     exp_data = p[4];
     vox_l = p[5]
 
-    t, M = run_random_walk(data, n_steps = Int(6e5), relaxivity = u[1], voxel_length = vox_l)
+    t, M = threaded_walk(data, 
+                         relaxivity = u[1], 
+                         n_steps = Int(6e5), 
+                         n_walkers = 1000 , 
+                         voxel_length = vox_l)
 
     if exp_data.seq in [NMRInversions.IR]
         M = 1 .- 2 .* M ./ maximum(M)
@@ -169,28 +179,3 @@ function read_vox_size(file)
     end
 end
 
-
-#=function foo()=#
-#==#
-#=    xyz = [zeros(3) for _ in 1:10]; # Coordinates of each walker=#
-#=    steps = [zeros(3) for _ in 1:10]; =#
-#=    step_size = 4=#
-#=    time_steps = 100=#
-#=    alive_walkers = trues(length(xyz))=#
-#==#
-#=    @time for i in 1:time_steps=#
-#==#
-#=        Threads.@threads for i in findall(alive_walkers)=#
-#==#
-#=            normalize!(randn!(steps[i]))=#
-#=            @. steps[i] = steps[i] * step_size=#
-#=            @. xyz[i] = xyz[i] + steps[i]=#
-#==#
-#=            if any(xyz[i] .>10)=#
-#=                alive_walkers[i] = false=#
-#=            end=#
-#=        end=#
-#=    end=#
-#=end=#
-#==#
-#=foo()=#
