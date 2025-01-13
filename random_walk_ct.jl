@@ -42,31 +42,15 @@ function read_raw_data(filename::String)
     return data 
 end
 
-function threaded_walk(data; kwargs...)
-
-    nthreads = 8
-    M = [zeros(Int, kwargs[:n_steps]) for _ in 1:nthreads]
-    t = zeros(Int, kwargs[:n_steps])
-
-    Threads.@threads for i in 1:nthreads
-        if i == 1
-            t, M[i] = run_random_walk(data; kwargs...)
-        else
-            _, M[i] = run_random_walk(data; kwargs...)
-        end
-    end
-
-    return t, sum(M)
-end
-
 
 function run_random_walk(lattice;
-                         relaxivity::Float64 = 200e-6, #m/s
-                         n_walkers::Int= 10^4,
+                         relaxivity::Float64 = 20e-6, #m/s
+                         n_walkers::Int= 10^4, # per thread
                          n_steps::Int = 10^4,
                          D::Float64 = 2.96e-9, #(water, m^2 s^-1)
                          voxel_length::Float64 = 2.25e-6 , # μm e-6 (m)
                          step_length::Float64 = voxel_length/7, 
+                         n_threads::Int = Threads.nthreads()
                          )
 
     grain::UInt8 = 1
@@ -78,36 +62,39 @@ function run_random_walk(lattice;
         CO2 = 0
     end
 
-    n_died = zeros(Int, n_steps) # number that died on step i
+    n_died = [zeros(Int, n_steps) for _ in 1:n_threads] # number that died on step i
     valid_starting_points = findall(x -> x != grain , lattice);
     kill_probability = (2*relaxivity*step_length) / (3*D)
 
-    # Run
-    for _ in 1:n_walkers
+    Threads.@threads for i in 1:n_threads
 
-        xyz = SVector{3, Float64}(Tuple(rand(valid_starting_points)) .* voxel_length)
-        xyz -= (@SVector rand(3)) .* voxel_length
+        for _ in 1:n_walkers
 
-        for i in 1:n_steps
-            xyz += (step = normalize(@SVector(randn(3))) * step_length)
-            voxel = lattice[Int.(cld.(xyz , voxel_length))...]
+            xyz = SVector{3, Float64}(Tuple(rand(valid_starting_points)) .* voxel_length)
+            xyz -= (@SVector rand(3)) .* voxel_length
 
-            if voxel == grain
-                if rand() < kill_probability
-                    n_died[i] += 1
-                    break
-                else # take a step back and continue
+            for t in 1:n_steps
+                xyz += (step = normalize(@SVector(randn(3))) * step_length)
+                voxel = lattice[Int.(cld.(xyz , voxel_length))...]
+
+                if voxel == grain
+                    if rand() < kill_probability
+                        n_died[i][t] += 1
+                        break
+                    else # take a step back and continue
+                        xyz -= step
+                    end
+                elseif voxel == CO2 # take a step back and continue
                     xyz -= step
                 end
-            elseif voxel == CO2 # take a step back and continue
-                xyz -= step
             end
         end
     end
 
     time_step = step_length^2 / 6D
     t = collect(1:n_steps) * time_step
-    M = n_walkers .- cumsum(n_died)
+    M = (n_walkers * n_threads) .- cumsum(sum(n_died))
+
     return t,M
 end
 
@@ -120,11 +107,11 @@ function cost(u,p)
     exp_data = p[4];
     vox_l = p[5]
 
-    t, M = threaded_walk(data, 
-                         relaxivity = u[1], 
-                         n_steps = Int(6e5), 
-                         n_walkers = 1000 , 
-                         voxel_length = vox_l)
+    t, M = run_random_walk(data, 
+                           relaxivity = u[1], 
+                           n_steps = Int(6e5), 
+                           n_walkers = 1000 , 
+                           voxel_length = vox_l)
 
     if exp_data.seq in [NMRInversions.IR]
         M = 1 .- 2 .* M ./ maximum(M)
