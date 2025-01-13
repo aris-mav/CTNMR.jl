@@ -6,7 +6,7 @@ using StaticArrays
 
 function read_raw_data(filename::String)
 
-    println("reading data from " * filename)
+    println("Reading data from : " * filename)
     data = zeros(UInt8, 1600,1600,1100)
 
     open(filename, "r") do io
@@ -34,10 +34,15 @@ function read_raw_data(filename::String)
     data[:,end,:].= grain;
     data[:,:,end].= grain;
 
-    println("data reading success")
+    println("Data read successfully.")
 
     porosity = count(data .!= grain) / length(data)
     @show porosity # sanity check
+
+    if  maximum(data) == 2
+        CO2fraction = count(data .== CO2) / length(data)
+        @show CO2fraction
+    end
     
     return data 
 end
