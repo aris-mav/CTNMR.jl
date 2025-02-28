@@ -3,6 +3,7 @@ using NMRInversions
 using Optim
 using UnicodePlots
 using StaticArrays
+using DelimitedFiles
 
 function read_raw_data(filename::String)
 
@@ -43,6 +44,8 @@ function read_raw_data(filename::String)
         CO2fraction = count(data .== CO2) / length(data)
         @show CO2fraction
     end
+
+    flush(stdout)
     
     return data 
 end
@@ -50,12 +53,13 @@ end
 
 function run_random_walk(lattice;
                          relaxivity::Float64 = 20e-6, #m/s
-                         n_walkers::Int= 10^4, # per thread
+                         n_walkers::Int= 5 * 10^4, # per thread
                          n_steps::Int = 10^4,
-                         D::Float64 = 2.96e-9, #(water, m^2 s^-1)
+                         D::Float64 = 2.443e-9, #(brine, m^2 s^-1)
                          voxel_length::Float64 = 2.25e-6 , # μm e-6 (m)
                          step_length::Float64 = voxel_length/7, 
-                         n_threads::Int = Threads.nthreads()
+                         n_threads::Int = Threads.nthreads(),
+                         file_name::String = "rw_results.csv"
                          )
 
     grain::UInt8 = 1
@@ -100,9 +104,14 @@ function run_random_walk(lattice;
     t = collect(1:n_steps) * time_step
     M = (n_walkers * n_threads) .- cumsum(sum(n_died))
 
+    open(file_name, "w") do io
+        writedlm(io, [t M], ',')
+    end
+
+    println(file_name*" saved.")
+
     return t,M
 end
-
 
 function cost(u,p)
 
@@ -130,16 +139,29 @@ function cost(u,p)
         M_compressed[i] = M[ind]
     end
 
+    #data_y = real.(exp_data.y) ./ maximum(real(exp_data.y))
+
+    #residuals = M_compressed .- data_y
+    #cost = norm(residuals, 1)
+
+    #p = lineplot(t_compressed, M_compressed, name = "Simulation",
+    #             title = "Rho: $(u[1]), Cost: $(cost)",xscale=:log10);
+    #lineplot!(p, exp_data.x, data_y , name = "Experiment")
+
     data_y = real.(exp_data.y) ./ maximum(real(exp_data.y))
 
-    residuals = M_compressed .- data_y
+    inv_exp = invert(IR, exp_data.x, data_y)
+    inv_sim = invert(IR, t_compressed, M_compressed)
+
+    residuals = inv_sim.f .- inv_exp.f
     cost = norm(residuals, 1)
 
-    p = lineplot(t_compressed, M_compressed, name = "Simulation",
+    p = lineplot(inv_sim.X, inv_sim.f, name = "Simulation",
                  title = "Rho: $(u[1]), Cost: $(cost)",xscale=:log10);
-    lineplot!(p, exp_data.x, data_y , name = "Experiment")
+    lineplot!(p, inv_exp.X, inv_exp.f , name = "Experiment")
 
     println(p)
+    flush(stdout)
 
     return cost
 
