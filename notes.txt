@@ -1,0 +1,8 @@
+porosity = 0.19291450710227273
+ * Minimizer: 7.175549e-04
+
+porosity = 0.1898554080255682
+CO2fraction = 0.0011875884232954545
+ * Minimizer: 4.675257e-04
+
+CO2fraction = 0.00072490234375
