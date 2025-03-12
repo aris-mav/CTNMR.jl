@@ -1,3 +1,4 @@
+export count_surface_points 
 function count_surface_points(A, voxel_length)
 
     A[1,:,:] .= false

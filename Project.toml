@@ -1,3 +1,8 @@
+name = "CT_NMR"
+uuid = "8a2776df-0686-43f6-8215-d80673b7dc2c"
+authors = ["aris <aristarchos.mavridis@manchester.ac.uk>"]
+version = "0.1.0"
+
 [deps]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
