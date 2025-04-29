@@ -1,4 +1,4 @@
-module CT_NMR
+module CTNMR
 
 using LinearAlgebra
 using NMRInversions
