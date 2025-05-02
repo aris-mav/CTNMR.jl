@@ -1,4 +1,4 @@
-name = "CT_NMR"
+name = "CTNMR"
 uuid = "8a2776df-0686-43f6-8215-d80673b7dc2c"
 authors = ["aris <aristarchos.mavridis@manchester.ac.uk>"]
 version = "0.1.0"
