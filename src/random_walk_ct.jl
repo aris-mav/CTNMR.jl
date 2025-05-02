@@ -4,7 +4,7 @@ function run_random_walk(lattice;
                          n_walkers::Int= 5 * 10^4, # per thread
                          n_steps::Int = 10^4,
                          D::Float64 = 2.443e-9, #(brine, m^2 s^-1)
-                         voxel_length::Float64 = 2.25e-6 , # μm e-6 (m)
+                         voxel_length::Float64 = 1.31e-6 , # μm e-6 (m)
                          step_length::Float64 = voxel_length/7, 
                          n_threads::Int = Threads.nthreads(),
                          file_name::String = "rw_results.csv"
